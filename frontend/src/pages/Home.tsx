@@ -15,8 +15,7 @@ export default function Home() {
                   New
                 </span>
                 <h2 className="inline-block px-3 py-1 5 lg:px-4 lg:py2 rounded-full fontmedium text-sm backdrop-blur-sm bg-foreground text-background dark:bg-primary dark:text-foreground border-2 border-secondary">
-                  <i className="bx bx-trending-up bx-xs"></i> Python CAG Project
-                  Awfera
+                  <i className="bx bx-trending-up bx-xs"></i> Python CAG Project | Hope to Skills
                 </h2>
               </div>
               <h1 className="text-3xl md:text-4xl lg:text-5xl xl:text-6xl font-extrabold tracking-tight text-foreground dark:text-background">

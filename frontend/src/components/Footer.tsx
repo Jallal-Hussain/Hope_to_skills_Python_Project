@@ -8,19 +8,19 @@ const Footer = () => {
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4 text-muted-secondary/70 dark:text-muted/80">
             <span className="text-sm">
-              © {new Date().getFullYear()} CAG Project-Awfera
+              © {new Date().getFullYear()} CAG Project-Hope to Skills
             </span>
             <span className="hidden md:block text-sm">All rights reserved</span>
             <div className="flex items-center gap-4">
               <span className="text-sm">
-                developed by{" "}
+                Developed by{" "}
                 <Link
                   to="https://jallalhussain.vercel.app"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="font-medium hover:underline"
+                  className="font-medium hover:underline hover:text-primary"
                 >
-                  Jallal Hussain
+                  Jalal Hussain
                 </Link>
               </span>
             </div>
