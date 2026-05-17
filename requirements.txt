@@ -7,5 +7,5 @@ sqlalchemy
 alembic
 mysql-connector-python
 python-jose
-passlib[bcrypt]
+bcrypt
 loguru
