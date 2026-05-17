@@ -1,4 +1,5 @@
 import os
+import time
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv, find_dotenv
@@ -7,6 +8,44 @@ from typing import List, Dict
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
 
+MODEL = "gemini-2.5-flash"
+MAX_RETRIES = 3
+RETRY_DELAY = 35  # seconds — slightly over the 30s retry window from the error
+
+def _get_client() -> genai.Client:
+    API_KEY = os.environ.get("GEMINI_API_KEY")
+    if not API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set in the .env file.")
+    return genai.Client(api_key=API_KEY)
+
+def _stream_with_retry(client: genai.Client, model: str, contents, config) -> str:
+    """
+    Stream content from Gemini with automatic retry on quota exhaustion (429).
+    """
+    for attempt in range(MAX_RETRIES):
+        try:
+            response_text = ""
+            for chunk in client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=config,
+            ):
+                response_text += chunk.text
+            return response_text
+        except Exception as e:
+            error_str = str(e)
+            is_quota_error = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+
+            if is_quota_error and attempt < MAX_RETRIES - 1:
+                wait = RETRY_DELAY * (attempt + 1)  # 35s, 70s, ...
+                time.sleep(wait)
+                continue
+
+            if is_quota_error:
+                raise RuntimeError(
+                    "Gemini API quota exceeded. Please wait a few minutes and try again."
+                )
+            raise  # re-raise non-quota errors as-is
 
 def get_llm_response(context: str, query: str) -> str:
     """
@@ -24,18 +63,8 @@ def get_llm_response(context: str, query: str) -> str:
         ValueError: If the GEMINI_API_KEY is not set or invalid in the .env file.
     """
 
-    # Set the API key for the Gemini API
-    API_KEY = os.environ.get("GEMINI_API_KEY")
-
-    # Check if the API key is set
-    if not API_KEY:
-        raise ValueError(
-            "GEMINI_API_KEY is not set in the .env file.",
-            "Set it to your Gemini API key.",
-        )
-
     # Initialize the Gemini client
-    client = genai.Client(api_key=API_KEY)
+    client = _get_client()
 
     model = "gemini-2.0-flash"
     contents = [
@@ -62,16 +91,7 @@ def get_llm_response(context: str, query: str) -> str:
         ],
     )
 
-    # Stream and accumulate the response
-    response_text = ""
-    for chunk in client.models.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=generate_content_config,
-    ):
-        response_text += chunk.text
-
-    return response_text
+    return _stream_with_retry(client, MODEL, contents, generate_content_config)
 
 def get_chat_response(context: str, conversation_history: List[Dict[str, str]], new_query: str) -> str:
     """
@@ -85,12 +105,9 @@ def get_chat_response(context: str, conversation_history: List[Dict[str, str]], 
     Returns:
         str: The LLM response
     """
-    API_KEY = os.environ.get("GEMINI_API_KEY")
-    if not API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set in the .env file.")
+    client = _get_client()
 
-    client = genai.Client(api_key=API_KEY)
-    model = "gemini-2.0-flash"
+    contents = []
     
     # Build conversation contents
     contents = []
@@ -131,15 +148,7 @@ def get_chat_response(context: str, conversation_history: List[Dict[str, str]], 
         ],
     )
 
-    response_text = ""
-    for chunk in client.models.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=generate_content_config,
-    ):
-        response_text += chunk.text
-
-    return response_text
+    return _stream_with_retry(client, MODEL, contents, generate_content_config)
 
 
 def generate_document_summary(context: str, filename: str) -> str:
@@ -153,12 +162,7 @@ def generate_document_summary(context: str, filename: str) -> str:
     Returns:
         str: The generated summary
     """
-    API_KEY = os.environ.get("GEMINI_API_KEY")
-    if not API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set in the .env file.")
-
-    client = genai.Client(api_key=API_KEY)
-    model = "gemini-2.0-flash"
+    client = _get_client()
     
     summary_prompt = f"""Please provide a comprehensive summary of the document "{filename}". 
     Your summary should include:
@@ -195,15 +199,7 @@ def generate_document_summary(context: str, filename: str) -> str:
         ],
     )
 
-    response_text = ""
-    for chunk in client.models.generate_content_stream(
-        model=model,
-        contents=contents,
-        config=generate_content_config,
-    ):
-        response_text += chunk.text
-
-    return response_text
+    return _stream_with_retry(client, MODEL, contents, generate_content_config)
 
 
 def generate_conversation_title(first_query: str) -> str:
@@ -218,11 +214,10 @@ def generate_conversation_title(first_query: str) -> str:
     """
     API_KEY = os.environ.get("GEMINI_API_KEY")
     if not API_KEY:
-        return f"Chat about: {first_query[:50]}..." if len(first_query) > 50 else f"Chat about: {first_query}"
+        return _fallback_title(first_query)
 
     try:
         client = genai.Client(api_key=API_KEY)
-        model = "gemini-2.0-flash"
         
         title_prompt = f"Generate a short, descriptive title (maximum 8 words) for a conversation that starts with this question: '{first_query}'. Return only the title, nothing else."
         
@@ -237,13 +232,7 @@ def generate_conversation_title(first_query: str) -> str:
             response_mime_type="text/plain",
         )
 
-        response_text = ""
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        ):
-            response_text += chunk.text
+        response_text = _stream_with_retry(client, MODEL, contents, generate_content_config)
 
         # Clean up the response and limit length
         title = response_text.strip().replace('"', '').replace("'", "")
@@ -251,4 +240,7 @@ def generate_conversation_title(first_query: str) -> str:
         
     except Exception:
         # Fallback to simple title generation
-        return f"Chat about: {first_query[:50]}..." if len(first_query) > 50 else f"Chat about: {first_query}"
+        return _fallback_title(first_query)
+
+def _fallback_title(query: str) -> str:
+    return f"Chat about: {query[:50]}..." if len(query) > 50 else f"Chat about: {query}"

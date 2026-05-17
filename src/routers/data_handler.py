@@ -201,7 +201,14 @@ def query_data(
             status_code=404,
             detail=f"UUID {uuid_str} not found. Use POST to upload the PDF.",
         )
-    llm_response = get_llm_response(context=doc.extracted_text, query=query)
+    
+    try:
+        llm_response = get_llm_response(context=doc.extracted_text, query=query)
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+    
     logger.info(f"User {current_user.username} queried document {uuid_str}")
     return {
         "uuid": uuid_str,
@@ -261,18 +268,14 @@ def start_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Start a new conversation with a document."""
     document_uuid_str = str(document_uuid)
-    
-    # Find the document
     doc = db.query(Document).filter_by(uuid=document_uuid_str, user_id=current_user.id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
-    
-    # Create new conversation
+
     conversation_uuid = str(uuid_pkg.uuid4())
-    conversation_title = generate_conversation_title(message_request.message)
-    
+    conversation_title = generate_conversation_title(message_request.message)  # has its own fallback, no try needed
+
     conversation = Conversation(
         uuid=conversation_uuid,
         title=conversation_title,
@@ -282,38 +285,31 @@ def start_conversation(
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
-    
-    # Add user message
-    user_message = ChatMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=message_request.message
-    )
+
+    user_message = ChatMessage(conversation_id=conversation.id, role="user", content=message_request.message)
     db.add(user_message)
-    
-    # Get LLM response (single message, no history yet)
-    llm_response = get_llm_response(context=doc.extracted_text, query=message_request.message)
-    
-    # Add assistant message
-    assistant_message = ChatMessage(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=llm_response
-    )
+
+    try:
+        llm_response = get_llm_response(context=doc.extracted_text, query=message_request.message)
+    except RuntimeError as e:
+        db.rollback()
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+
+    assistant_message = ChatMessage(conversation_id=conversation.id, role="assistant", content=llm_response)
     db.add(assistant_message)
-    
-    # Update conversation timestamp
     conversation.updated_at = datetime.now(UTC)
     db.commit()
-    
-    # Return conversation with messages
+
     messages = [
         ChatMessageResponse(role=user_message.role, content=user_message.content, timestamp=user_message.timestamp),
         ChatMessageResponse(role=assistant_message.role, content=assistant_message.content, timestamp=assistant_message.timestamp)
     ]
-    
+
     logger.info(f"User {current_user.username} started conversation {conversation_uuid} with document {document_uuid_str}")
-    
+
     return ConversationResponse(
         uuid=conversation.uuid,
         title=conversation.title,
@@ -329,51 +325,39 @@ def continue_conversation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Continue an existing conversation."""
     conversation_uuid_str = str(conversation_uuid)
-    
-    # Find the conversation
     conversation = db.query(Conversation).filter_by(
-        uuid=conversation_uuid_str, 
-        user_id=current_user.id,
-        is_active=True
+        uuid=conversation_uuid_str, user_id=current_user.id, is_active=True
     ).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found.")
-    
-    # Get conversation history
+
     messages = db.query(ChatMessage).filter_by(conversation_id=conversation.id).order_by(ChatMessage.timestamp).all()
     conversation_history = [{"role": msg.role, "content": msg.content} for msg in messages]
-    
-    # Add user message
-    user_message = ChatMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=message_request.message
-    )
+
+    user_message = ChatMessage(conversation_id=conversation.id, role="user", content=message_request.message)
     db.add(user_message)
-    
-    # Get LLM response with conversation history
-    llm_response = get_chat_response(
-        context=conversation.document.extracted_text,
-        conversation_history=conversation_history,
-        new_query=message_request.message
-    )
-    
-    # Add assistant message
-    assistant_message = ChatMessage(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=llm_response
-    )
+
+    try:
+        llm_response = get_chat_response(
+            context=conversation.document.extracted_text,
+            conversation_history=conversation_history,
+            new_query=message_request.message
+        )
+    except RuntimeError as e:
+        db.rollback()
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+
+    assistant_message = ChatMessage(conversation_id=conversation.id, role="assistant", content=llm_response)
     db.add(assistant_message)
-    
-    # Update conversation timestamp
     conversation.updated_at = datetime.now(UTC)
     db.commit()
-    
+
     logger.info(f"User {current_user.username} continued conversation {conversation_uuid_str}")
-    
+
     return ChatMessageResponse(
         role=assistant_message.role,
         content=assistant_message.content,
@@ -467,30 +451,25 @@ def generate_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Generate a summary for a document."""
     document_uuid_str = str(document_uuid)
-    
     doc = db.query(Document).filter_by(uuid=document_uuid_str, user_id=current_user.id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
-    
+
     try:
-        # Generate summary using LLM
         summary = generate_document_summary(doc.extracted_text, doc.filename)
-        
-        # Save summary to database
         doc.summary = summary
         doc.summary_generated_at = datetime.now(UTC)
         db.commit()
-        
         logger.info(f"User {current_user.username} generated summary for document {document_uuid_str}")
-        
         return DocumentSummaryResponse(
             uuid=doc.uuid,
             filename=doc.filename,
             summary=summary,
             summary_generated_at=doc.summary_generated_at
         )
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))  # clean quota message
     except Exception as e:
         logger.error(f"Summary generation failed for user {current_user.username}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
