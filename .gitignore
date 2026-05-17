@@ -15,6 +15,7 @@ uploads/
 env/
 venv/
 .venv/
+pdfprocessingproject/
 
 # Other common Python ignores
 *.egg-info/
