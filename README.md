@@ -1,5 +1,9 @@
 # CAG Project: Chat with Your PDF
 
+## Landing Page
+
+![Landing Page Screenshot](./Landing.png)
+
 ## Table of Contents
 
 - [Introduction](#introduction)
