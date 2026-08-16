@@ -4,6 +4,27 @@ from datetime import datetime, UTC
 
 Base = declarative_base()
 
+
+class RevokedToken(Base):
+    __tablename__ = 'revoked_tokens'
+    id = Column(Integer, primary_key=True, index=True)
+    jti = Column(String(255), unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class PasswordResetToken(Base):
+    __tablename__ = 'password_reset_tokens'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    token_hash = Column(String(255), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    user = relationship('User', back_populates='password_reset_tokens')
+
+
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True, index=True)
@@ -12,6 +33,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     documents = relationship('Document', back_populates='owner')
     conversations = relationship('Conversation', back_populates='user')
+    password_reset_tokens = relationship('PasswordResetToken', back_populates='user')
 
 class Document(Base):
     __tablename__ = 'documents'

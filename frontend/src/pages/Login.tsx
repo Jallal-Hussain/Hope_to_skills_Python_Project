@@ -19,13 +19,11 @@ export default function Login() {
     setLoading(true);
     setError("");
     try {
-      const res = await api.post(`${BASE_URL}/auth/login`, {
+      await api.post(`${BASE_URL}/auth/login`, {
         username,
         password,
       });
-      localStorage.setItem("token", res.data.access_token);
 
-      // Notify other components about auth state change
       window.dispatchEvent(new CustomEvent("authStateChanged"));
 
       navigate("/admin/dashboard");

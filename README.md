@@ -108,6 +108,8 @@ This project uses environment variables for sensitive information and configurat
     print(os.urandom(24).hex())
     ```
 
+> Security warning: if any secret was previously hardcoded in this repository or in earlier git history, rotate it immediately and purge it from all local copies and Git history.
+
 ### Optional Environment Variables:
 
 -   `MYSQL_DATABASE_URL`: If you want to use MySQL instead of the default SQLite, provide your MySQL connection string here (e.g., `mysql+mysqlconnector://user:password@host:port/database`).
@@ -115,8 +117,8 @@ This project uses environment variables for sensitive information and configurat
 Example `.env` file:
 
 ```
-GEMINI_API_KEY="YOUR_GEMINI_API_KEY"
-JWT_SECRET_KEY="YOUR_RANDOM_SECRET_KEY"
+GEMINI_API_KEY="your_gemini_api_key_here"
+JWT_SECRET_KEY="replace_with_a_strong_random_secret"
 # MYSQL_DATABASE_URL="mysql+mysqlconnector://user:password@localhost:3306/your_database"
 ```
 

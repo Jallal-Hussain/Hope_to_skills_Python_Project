@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { BASE_URL } from "../api/var";
 
 type LogoutButtonProps = {
   onLogout?: () => void; // Optional callback to notify parent components
@@ -7,13 +8,18 @@ type LogoutButtonProps = {
 export default function LogoutButton({ onLogout }: LogoutButtonProps) {
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    localStorage.removeItem("token");
+  const handleLogout = async () => {
+    try {
+      await fetch(`${BASE_URL}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // Ignore network error and continue with local UX cleanup.
+    }
 
-    // Notify other components about auth state change
     window.dispatchEvent(new CustomEvent("authStateChanged"));
 
-    // Call optional callback
     if (onLogout) {
       onLogout();
     }

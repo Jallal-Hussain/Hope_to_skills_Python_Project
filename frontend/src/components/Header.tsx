@@ -2,38 +2,33 @@ import { Link } from "react-router-dom";
 import { useState, useEffect } from "react";
 import LogoutButton from "./LogoutButton";
 import ThemeToggle from "./ThemeToggle";
+import { BASE_URL } from "../api/var";
 
 const Header = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Check authentication state on component mount and when localStorage changes
-  const checkAuthState = () => {
-    const token = localStorage.getItem("token");
-    setIsAuthenticated(!!token);
+  const checkAuthState = async () => {
+    try {
+      const response = await fetch(`${BASE_URL}/auth/session`, {
+        method: "GET",
+        credentials: "include",
+      });
+      setIsAuthenticated(response.ok);
+    } catch {
+      setIsAuthenticated(false);
+    }
   };
 
   useEffect(() => {
-    // Initial check
     checkAuthState();
 
-    // Listen for storage changes (when token is added/removed)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "token") {
-        checkAuthState();
-      }
-    };
-
-    // Listen for custom events (for programmatic token changes)
     const handleAuthChange = () => {
       checkAuthState();
     };
 
-    window.addEventListener("storage", handleStorageChange);
     window.addEventListener("authStateChanged", handleAuthChange);
 
-    // Cleanup listeners
     return () => {
-      window.removeEventListener("storage", handleStorageChange);
       window.removeEventListener("authStateChanged", handleAuthChange);
     };
   }, []);

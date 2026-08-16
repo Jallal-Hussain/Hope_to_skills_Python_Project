@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, HTTPException, Query, File, Depends, status
+from fastapi import APIRouter, UploadFile, HTTPException, Query, File, Depends, status, Request
 import uuid as uuid_pkg
 import os
 from sqlalchemy.orm import Session
@@ -19,11 +19,28 @@ from datetime import datetime, UTC
 router = APIRouter()
 
 UPLOAD_DIR = "./uploads"
+REAL_UPLOAD_DIR = os.path.realpath(UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_PDF_PAGES = 100
 UUID_REGEX = re.compile(r"^[a-fA-F0-9\-]{36}$")
+
+
+def safe_upload_path(filename: str, uuid_str: str, suffix: str = "") -> str:
+    if not filename:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    safe_name = os.path.basename(filename)
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid file name.")
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)
+    if not sanitized or sanitized in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid file name.")
+    final_name = f"{uuid_str}{suffix}_{sanitized}"
+    final_path = os.path.realpath(os.path.join(UPLOAD_DIR, final_name))
+    if os.path.commonpath([REAL_UPLOAD_DIR, final_path]) != REAL_UPLOAD_DIR:
+        raise HTTPException(status_code=400, detail="Invalid file path.")
+    return final_path
 
 # Pydantic models for request/response
 class ChatMessageRequest(BaseModel):
@@ -56,12 +73,16 @@ def get_db():
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+def get_current_user(request: Request, token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if not token:
+        token = request.cookies.get("access_token")
+    if not token:
+        raise credentials_exception
     payload = decode_access_token(token)
     if not payload or "user_id" not in payload:
         raise credentials_exception
@@ -85,7 +106,7 @@ def upload_pdf(uuid: uuid_pkg.UUID, file: UploadFile = File(...), db: Session = 
     if file.size is not None and file.size > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail=f"File too large. Max size is {MAX_FILE_SIZE // (1024*1024)}MB.")
     # Save file temporarily to check page count
-    file_path = os.path.join(UPLOAD_DIR, f"{uuid_str}_{file.filename}")
+    file_path = safe_upload_path(file.filename, uuid_str)
     with open(file_path, "wb") as buffer:
         content = file.file.read()
         if len(content) > MAX_FILE_SIZE:
@@ -124,16 +145,16 @@ def upload_pdf(uuid: uuid_pkg.UUID, file: UploadFile = File(...), db: Session = 
         db.add(doc)
         db.commit()
         db.refresh(doc)
-        logger.info(f"User {current_user.username} uploaded PDF {file.filename} with UUID {uuid_str}")
+        logger.info("PDF upload completed successfully.")
         return {
             "message": f"PDF {file.filename} uploaded and text extracted successfully.",
             "uuid": uuid_str,
         }
-    except Exception as e:
-        logger.error(f"Upload failed for user {current_user.username}: {str(e)}")
+    except Exception:
+        logger.error("PDF upload failed during file processing.")
         raise HTTPException(
             status_code=500,
-            detail=f"An error occurred during file processing: {str(e)}",
+            detail="An error occurred during file processing.",
         )
 
 @router.put("/update/{uuid}", status_code=200)
@@ -146,7 +167,7 @@ def update_pdf_data(uuid: uuid_pkg.UUID, file: UploadFile = File(...), db: Sessi
         )
     if file.size is not None and file.size > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail=f"File too large. Max size is {MAX_FILE_SIZE // (1024*1024)}MB.")
-    file_path = os.path.join(UPLOAD_DIR, f"{uuid_str}_update_{file.filename}")
+    file_path = safe_upload_path(file.filename, uuid_str, "_update")
     with open(file_path, "wb") as buffer:
         content = file.file.read()
         if len(content) > MAX_FILE_SIZE:
@@ -159,18 +180,18 @@ def update_pdf_data(uuid: uuid_pkg.UUID, file: UploadFile = File(...), db: Sessi
             raise HTTPException(status_code=400, detail=f"PDF too long. Max {MAX_PDF_PAGES} pages allowed.")
     except Exception:
         os.remove(file_path)
-        logger.error(f"Update failed for user {current_user.username}: Invalid or corrupted PDF file.")
+        logger.error("PDF update failed: invalid or corrupted file.")
         raise HTTPException(status_code=400, detail="Invalid or corrupted PDF file.")
     doc = db.query(Document).filter_by(uuid=uuid_str, user_id=current_user.id).first()
     if not doc:
-        logger.error(f"Update failed: Document {uuid_str} not found for user {current_user.username}")
+        logger.error("PDF update failed: document not found for the current user.")
         raise HTTPException(
             status_code=404,
             detail=f"UUID {uuid_str} not found. Use POST to upload the PDF.",
         )
     new_text = extract_text_from_pdf(file_path)
     if not new_text:
-        logger.error(f"Update failed: Text extraction failed for user {current_user.username}, file {file.filename}")
+        logger.error("PDF update failed: text extraction returned empty content.")
         raise HTTPException(
             status_code=500, detail="Error extracting text from PDF."
         )
@@ -178,7 +199,7 @@ def update_pdf_data(uuid: uuid_pkg.UUID, file: UploadFile = File(...), db: Sessi
     doc.filename = file.filename
     doc.file_path = file_path
     db.commit()
-    logger.info(f"User {current_user.username} updated PDF {file.filename} with UUID {uuid_str}")
+    logger.info("PDF update completed successfully.")
     return {
         "message": f"PDF {file.filename} updated and text extracted successfully.",
         "uuid": uuid_str,
@@ -196,7 +217,7 @@ def query_data(
     uuid_str = str(uuid)
     doc = db.query(Document).filter_by(uuid=uuid_str, user_id=current_user.id).first()
     if not doc:
-        logger.error(f"Query failed: Document {uuid_str} not found for user {current_user.username}")
+        logger.error("Query failed: document not found for current user.")
         raise HTTPException(
             status_code=404,
             detail=f"UUID {uuid_str} not found. Use POST to upload the PDF.",
@@ -205,11 +226,11 @@ def query_data(
     try:
         llm_response = get_llm_response(context=doc.extracted_text, query=query)
     except RuntimeError as e:
-        raise HTTPException(status_code=429, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(status_code=429, detail="LLM quota exceeded. Please try again later.")
+    except Exception:
+        raise HTTPException(status_code=500, detail="LLM request failed.")
     
-    logger.info(f"User {current_user.username} queried document {uuid_str}")
+    logger.info("PDF query completed successfully.")
     return {
         "uuid": uuid_str,
         "query": query,
@@ -221,7 +242,7 @@ def delete_data(uuid: uuid_pkg.UUID, db: Session = Depends(get_db), current_user
     uuid_str = str(uuid)
     doc = db.query(Document).filter_by(uuid=uuid_str, user_id=current_user.id).first()
     if not doc:
-        logger.error(f"Delete failed: Document {uuid_str} not found for user {current_user.username}")
+        logger.error("Delete failed: document not found for current user.")
         raise HTTPException(
             status_code=404,
             detail=f"UUID {uuid_str} not found. Use POST to upload the PDF.",
@@ -230,7 +251,7 @@ def delete_data(uuid: uuid_pkg.UUID, db: Session = Depends(get_db), current_user
     db.commit()
     if os.path.exists(doc.file_path):
         os.remove(doc.file_path)
-    logger.info(f"User {current_user.username} deleted document {uuid_str}")
+    logger.info("Document deletion completed successfully.")
     return {"message": f"Data for UUID {uuid_str} deleted successfully."}
 
 @router.get("/list_uuids", status_code=200)
@@ -242,7 +263,7 @@ def list_all_uuids(db: Session = Depends(get_db), current_user: User = Depends(g
         ]
         return {"pdfs": pdfs}
     except Exception as e:
-        print("Error in list_all_uuids:", str(e))
+        logger.error("List documents request failed.")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/download/{uuid}", response_class=FileResponse)
@@ -250,12 +271,12 @@ def download_pdf(uuid: uuid_pkg.UUID, db: Session = Depends(get_db), current_use
     uuid_str = str(uuid)
     doc = db.query(Document).filter_by(uuid=uuid_str, user_id=current_user.id).first()
     if not doc:
-        logger.error(f"Download failed: Document {uuid_str} not found for user {current_user.username}")
+        logger.error("Download failed: document not found for current user.")
         raise HTTPException(status_code=404, detail="Document not found or access denied.")
     if not os.path.exists(doc.file_path):
-        logger.error(f"Download failed: File not found for document {uuid_str} by user {current_user.username}")
+        logger.error("Download failed: file not found on server.")
         raise HTTPException(status_code=404, detail="File not found on server.")
-    logger.info(f"User {current_user.username} downloaded document {uuid_str}")
+    logger.info("Document download completed successfully.")
     return FileResponse(path=doc.file_path, filename=doc.filename, media_type="application/pdf")
 
 
@@ -291,12 +312,12 @@ def start_conversation(
 
     try:
         llm_response = get_llm_response(context=doc.extracted_text, query=message_request.message)
-    except RuntimeError as e:
+    except RuntimeError:
         db.rollback()
-        raise HTTPException(status_code=429, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=429, detail="LLM quota exceeded. Please try again later.")
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(status_code=500, detail="LLM request failed.")
 
     assistant_message = ChatMessage(conversation_id=conversation.id, role="assistant", content=llm_response)
     db.add(assistant_message)
@@ -308,7 +329,7 @@ def start_conversation(
         ChatMessageResponse(role=assistant_message.role, content=assistant_message.content, timestamp=assistant_message.timestamp)
     ]
 
-    logger.info(f"User {current_user.username} started conversation {conversation_uuid} with document {document_uuid_str}")
+    logger.info("Conversation started successfully.")
 
     return ConversationResponse(
         uuid=conversation.uuid,
@@ -344,19 +365,19 @@ def continue_conversation(
             conversation_history=conversation_history,
             new_query=message_request.message
         )
-    except RuntimeError as e:
+    except RuntimeError:
         db.rollback()
-        raise HTTPException(status_code=429, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=429, detail="LLM quota exceeded. Please try again later.")
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"LLM error: {str(e)}")
+        raise HTTPException(status_code=500, detail="LLM request failed.")
 
     assistant_message = ChatMessage(conversation_id=conversation.id, role="assistant", content=llm_response)
     db.add(assistant_message)
     conversation.updated_at = datetime.now(UTC)
     db.commit()
 
-    logger.info(f"User {current_user.username} continued conversation {conversation_uuid_str}")
+    logger.info("Conversation continuation completed successfully.")
 
     return ChatMessageResponse(
         role=assistant_message.role,
@@ -439,7 +460,7 @@ def delete_conversation(
     conversation.is_active = False
     db.commit()
     
-    logger.info(f"User {current_user.username} deleted conversation {conversation_uuid_str}")
+    logger.info("Conversation deleted successfully.")
     
     return {"message": "Conversation deleted successfully."}
 
@@ -461,18 +482,18 @@ def generate_summary(
         doc.summary = summary
         doc.summary_generated_at = datetime.now(UTC)
         db.commit()
-        logger.info(f"User {current_user.username} generated summary for document {document_uuid_str}")
+        logger.info("Summary generation completed successfully.")
         return DocumentSummaryResponse(
             uuid=doc.uuid,
             filename=doc.filename,
             summary=summary,
             summary_generated_at=doc.summary_generated_at
         )
-    except RuntimeError as e:
-        raise HTTPException(status_code=429, detail=str(e))  # clean quota message
-    except Exception as e:
-        logger.error(f"Summary generation failed for user {current_user.username}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating summary: {str(e)}")
+    except RuntimeError:
+        raise HTTPException(status_code=429, detail="LLM quota exceeded. Please try again later.")
+    except Exception:
+        logger.error("Summary generation failed.")
+        raise HTTPException(status_code=500, detail="Error generating summary.")
 
 @router.get("/summary/{document_uuid}", response_model=DocumentSummaryResponse)
 def get_summary(

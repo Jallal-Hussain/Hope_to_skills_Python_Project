@@ -1,15 +1,12 @@
 import api from "./axios";
 import { BASE_URL } from "./var";
 
-const getAuthHeaders = () => {
-  return {
-    Authorization: `Bearer ${localStorage.getItem("token")}`,
-  };
-};
+const getAuthHeaders = () => ({
+  "Content-Type": "application/json",
+});
 
 export const fetchPdfsAPI = async () => {
   const response = await api.get(`${BASE_URL}/list_uuids`, {
-    headers: getAuthHeaders(),
     withCredentials: true,
   });
   return response.data.pdfs;
@@ -21,7 +18,6 @@ export const uploadPdfAPI = async (uuid: string, file: File, onUploadProgress: (
 
   return api.post(`${BASE_URL}/upload/${uuid}`, formData, {
     headers: {
-      ...getAuthHeaders(),
       "Content-Type": "multipart/form-data",
     },
     onUploadProgress: (progressEvent) => {
@@ -35,7 +31,7 @@ export const uploadPdfAPI = async (uuid: string, file: File, onUploadProgress: (
 
 export const downloadPdfAPI = async (uuid: string) => {
   const response = await api.get(`${BASE_URL}/download/${uuid}`, {
-    headers: getAuthHeaders(),
+    withCredentials: true,
     responseType: "blob",
   });
 
@@ -51,13 +47,13 @@ export const downloadPdfAPI = async (uuid: string) => {
 
 export const deletePdfAPI = async (uuid: string) => {
   return api.delete(`${BASE_URL}/delete/${uuid}`, {
-    headers: getAuthHeaders(),
+    withCredentials: true,
   });
 };
 
 export const queryLlmAPI = async (uuid: string, query: string) => {
   const response = await api.get(`${BASE_URL}/query/${uuid}`, {
-    headers: getAuthHeaders(),
+    withCredentials: true,
     params: { query },
   });
   return response.data.llm_response;
@@ -92,7 +88,7 @@ export interface ConversationListItem {
 export const startConversationAPI = async (documentUuid: string, message: string): Promise<Conversation> => {
   const response = await api.post(`${BASE_URL}/chat/start/${documentUuid}`, 
     { message },
-    { headers: getAuthHeaders() }
+    { withCredentials: true }
   );
   return response.data;
 };
@@ -100,21 +96,21 @@ export const startConversationAPI = async (documentUuid: string, message: string
 export const continueConversationAPI = async (conversationUuid: string, message: string): Promise<ChatMessage> => {
   const response = await api.post(`${BASE_URL}/chat/continue/${conversationUuid}`, 
     { message },
-    { headers: getAuthHeaders() }
+    { withCredentials: true }
   );
   return response.data;
 };
 
 export const getConversationsAPI = async (): Promise<ConversationListItem[]> => {
   const response = await api.get(`${BASE_URL}/chat/conversations`, {
-    headers: getAuthHeaders(),
+    withCredentials: true,
   });
   return response.data;
 };
 
 export const getConversationAPI = async (conversationUuid: string): Promise<Conversation> => {
   const response = await api.get(`${BASE_URL}/chat/conversation/${conversationUuid}`, {
-    headers: getAuthHeaders(),
+    withCredentials: true,
   });
   return response.data;
 };

@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+import uuid
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, HTMLResponse
 from src.routers import data_handler
-from fastapi.responses import HTMLResponse
 from src.db import init_db
 from src.routers import auth
+from src.config import APP_ENV, FRONTEND_ORIGINS, HOST, PORT, DEBUG
 from loguru import logger
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,14 +12,46 @@ app = FastAPI(
     title="CAG Project Api Chatwith Your PDF ",
     description="API for uploading PDFs, querying content through LLMs, and managing data.",
     version="0.1.0",
+    debug=DEBUG,
 )
+
+
+@app.middleware("http")
+async def add_security_headers_and_correlation_id(request: Request, call_next):
+    correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+    request.state.correlation_id = correlation_id
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; "
+        "img-src 'self' data:; style-src 'self' 'unsafe-inline';"
+    )
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    logger.warning(f"HTTP exception for {request.url.path} [{correlation_id}]: {exc.status_code} {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail if exc.status_code < 500 else "Request failed.", "correlation_id": correlation_id},
+    )
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    logger.exception(f"Unhandled server exception [{correlation_id}] for path {request.url.path}")
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {str(exc)}"},
+        content={"detail": "An unexpected error occurred.", "correlation_id": correlation_id},
     )
+
 
 app.include_router(
     data_handler.router,
@@ -30,16 +63,16 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173","http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173", "http://127.0.0.1:8001"],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Correlation-ID"],
 )
 
 init_db()
 
 logger.add("logs/app.log", rotation="1 week", retention="4 weeks", level="INFO")
-logger.info("Starting CAG Project API application.")
+logger.info(f"Starting CAG Project API application in {APP_ENV} mode.")
 
 
 @app.get("/", response_class=HTMLResponse, tags=["Root"])

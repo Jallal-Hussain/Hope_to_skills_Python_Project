@@ -1,3 +1,4 @@
+from loguru import logger
 from pypdf import PdfReader
 
 
@@ -26,8 +27,8 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return "\n".join(full_text)
 
     except FileNotFoundError:
-        print(f"Error: File not found at {pdf_path}")
+        logger.error("PDF extraction failed because the file could not be found.")
         return ""
-    except Exception as e:
-        print(f"An error occurred while extracting text from PDF: {str(e)}")
+    except Exception:
+        logger.exception("PDF extraction failed for an unexpected reason.")
         return ""
